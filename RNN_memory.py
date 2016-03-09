@@ -34,14 +34,15 @@ def clip_gradients_norm(gradients, threshold, parameters, fix_nan = False):
 
 # Warning: assumes n_batch is a divisor of number of data points
 # Suggestion: preprocess outputs to have norm 1 at each time step
-def main(n_iter, n_batch, n_hidden, time_steps, learning_rate, savefile, scale_penalty, use_scale,
-         model, n_hidden_lstm, loss_function, cost_every_t, n_gru_lr_proj, initial_b_u):
+def main(datafile, n_iter, n_batch, n_hidden, time_steps, learning_rate, savefile, scale_penalty, use_scale,
+         model, n_hidden_lstm, loss_function, cost_every_t, n_gru_lr_proj, initial_b_u, load_iter):
 
 
     # --- Manage data --------------------
     #f = file('/u/shahamar/complex_RNN/trainingRNNs-master/memory_data_300.pkl', 'rb')
     #f = file('./memory_data_20.pkl', 'rb')
-    f = file('./memory_data_500.pkl', 'rb')
+    #f = file('./memory_data_500.pkl', 'rb')
+    f = file(datafile, 'rb')
     dict = cPickle.load(f)
     f.close()
 
@@ -76,13 +77,20 @@ def main(n_iter, n_batch, n_hidden, time_steps, learning_rate, savefile, scale_p
         gradients = [T.clip(g, -gradient_clipping, gradient_clipping) for g in gradients]
     
     elif (model == 'GRU'): 
-        inputs, parameters, costs = GRU(n_input, n_hidden_lstm, n_output, n_gru_lr_proj,
+        inputs, parameters, costs = GRU(n_input, n_hidden_lstm, n_output, 
                                          out_every_t=cost_every_t, loss_function=loss_function, initial_b_u=initial_b_u)
         gradients = T.grad(costs[0], parameters)
         gradients = [T.clip(g, -gradient_clipping, gradient_clipping) for g in gradients]
    
     elif (model == 'GRU_LR'):
-        inputs, parameters, costs = GRU(n_input, n_hidden_lstm, n_output,
+        inputs, parameters, costs = GRU_LR(n_input, n_hidden_lstm, n_output, n_gru_lr_proj,
+                                         out_every_t=cost_every_t, loss_function=loss_function, initial_b_u=initial_b_u)
+        gradients = T.grad(costs[0], parameters)
+        #gradients = [T.clip(g, -gradient_clipping, gradient_clipping) for g in gradients]
+        gradients = clip_gradients_norm(gradients, gradient_clipping, parameters, fix_nan = True)
+    
+    elif (model == 'GRU_LRDiag'):
+        inputs, parameters, costs = GRU_LRDiag(n_input, n_hidden_lstm, n_output, n_gru_lr_proj,
                                          out_every_t=cost_every_t, loss_function=loss_function, initial_b_u=initial_b_u)
         gradients = T.grad(costs[0], parameters)
         #gradients = [T.clip(g, -gradient_clipping, gradient_clipping) for g in gradients]
@@ -170,7 +178,23 @@ def main(n_iter, n_batch, n_hidden, time_steps, learning_rate, savefile, scale_p
     test_loss = []
     best_params = [p.get_value() for p in parameters]
     best_test_loss = 1e6
-    for i in xrange(n_iter):
+
+    if load_iter > 0:
+	loaded_data = cPickle.load(file(savefile, 'rb'))
+        loaded_parameters = loaded_data['parameters']
+	for j, p in enumerate(parameters):
+        	p.set_value(loaded_parameters[j])
+        loaded_rmsprop = loaded_data['rmsprop']
+        for j, r in enumerate(rmsprop):
+		r.set_value(loaded_rmsprop[j])
+        train_loss = loaded_data['train_loss']
+	test_loss = loaded_data['test_loss']
+        best_params = loaded_data['best_params']
+        best_test_loss =  loaded_data['best_test_loss']
+        model = loaded_data['model']
+        time_steps = loaded_data['time_steps']
+
+    for i in xrange(load_iter, n_iter):
 #        start_time = timeit.default_timer()
      #   pdb.set_trace()
 
@@ -227,6 +251,7 @@ def main(n_iter, n_batch, n_hidden, time_steps, learning_rate, savefile, scale_p
 if __name__=="__main__":
     parser = argparse.ArgumentParser(
         description="training a model")
+    parser.add_argument("datafile")
     parser.add_argument("n_iter", type=int, default=20000)
     parser.add_argument("n_batch", type=int, default=20)
     parser.add_argument("n_hidden", type=int, default=512)
@@ -241,6 +266,7 @@ if __name__=="__main__":
     parser.add_argument("cost_every_t", default=False)
     parser.add_argument("n_gru_lr_proj", type=int, default=16)
     parser.add_argument("initial_b_u", type=float, default=1.0)
+    parser.add_argument("load_iter", type=int, default=0)
 
 
     args = parser.parse_args()
@@ -250,7 +276,8 @@ if __name__=="__main__":
     
     
 
-    kwargs = {'n_iter': dict['n_iter'],
+    kwargs = {'datafile': dict['datafile'],
+              'n_iter': dict['n_iter'],
               'n_batch': dict['n_batch'],
               'n_hidden': dict['n_hidden'],
               'time_steps': dict['time_steps'],
@@ -263,6 +290,7 @@ if __name__=="__main__":
               'loss_function': dict['loss_function'],
               'cost_every_t': dict['cost_every_t'],
               'n_gru_lr_proj': dict['n_gru_lr_proj'],
-              'initial_b_u': dict['initial_b_u']}
+              'initial_b_u': dict['initial_b_u'],
+              'load_iter': dict['load_iter']}
 
     main(**kwargs)

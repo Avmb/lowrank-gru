@@ -19,7 +19,7 @@ def main():
 
 	n = n_train + n_test
 	rng = check_random_state(0)
-        ids = rng.random_integers(8, size=(10, n))
+        ids = rng.random_integers(0, 7, size=(10, n))
 
 	x = np.zeros((time_steps+20, n, 10), dtype=theano.config.floatX)
 	y = np.zeros((time_steps+20, n, 10), dtype=theano.config.floatX)

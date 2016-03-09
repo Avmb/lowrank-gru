@@ -3,6 +3,9 @@ import theano.tensor as T
 import numpy as np
 from fftconv import cufft, cuifft
 
+#theano.config.mode='FAST_COMPILE'
+#theano.config.exception_verbosity = 'high'
+
 def relu(x):
     return 0.5 * (x + abs(x))
 
@@ -473,6 +476,110 @@ def GRU_LR(n_input, n_hidden, n_output, n_proj, out_every_t=False, loss_function
         update_t = T.nnet.sigmoid(T.dot(x_t, W_u) + T.dot(h_prev, U_proj_u).dot(U_u) + b_u.dimshuffle('x', 0))
         reset_t  = T.nnet.sigmoid(T.dot(x_t, W_r) + T.dot(h_prev, U_proj_r).dot(U_r) + b_r.dimshuffle('x', 0))
         main_t   = T.tanh(T.dot(x_t, W_m) + T.dot(h_prev * reset_t, U_proj_m).dot(U_m) + b_m.dimshuffle('x', 0))
+
+        h_t = (1.0 - update_t) * main_t + update_t * h_prev
+
+        if out_every_t:
+            lin_output = T.dot(h_t, out_mat) + out_bias.dimshuffle('x', 0)
+            if loss_function == 'CE':
+                RNN_output = T.nnet.softmax(lin_output)
+                cost_t = T.nnet.categorical_crossentropy(RNN_output, y_t).mean()
+                acc_t =(T.eq(T.argmax(RNN_output, axis=-1), T.argmax(y_t, axis=-1))).mean(dtype=theano.config.floatX)
+            elif loss_function == 'MSE':
+                cost_t = ((lin_output - y_t)**2).mean()
+                acc_t = theano.shared(np.float32(0.0))
+        else:
+            cost_t = theano.shared(np.float32(0.0))
+            acc_t = theano.shared(np.float32(0.0))
+ 
+        return h_t, cost_t, acc_t
+
+    non_sequences = [W_m, W_u, W_r, U_m, U_u, U_r, b_m, b_u, b_r, out_mat, out_bias]
+
+    #h_0_batch = T.tile(h_0, [x.shape[1], 1])
+    h_0_batch = T.repeat(h_0, x.shape[1], axis=0)
+    
+    if out_every_t:
+        sequences = [x, y]
+    else:
+        #sequences = [x, T.tile(theano.shared(np.zeros((1,1), dtype=theano.config.floatX)), [x.shape[0], 1, 1])]
+        sequences = [x, T.repeat(theano.shared(np.zeros((1,1), dtype=theano.config.floatX)), x.shape[0], axis=0)]
+    
+    [hidden_states, cost_steps, acc_steps], updates = theano.scan(fn = recurrence, sequences = sequences, non_sequences = non_sequences, outputs_info = [h_0_batch, theano.shared(np.float32(0.0)), theano.shared(np.float32(0.0))])
+    
+    if not out_every_t:
+        lin_output = T.dot(hidden_states[-1,:,:], out_mat) + out_bias.dimshuffle('x', 0)
+
+        # define the cost
+        if loss_function == 'CE':
+            RNN_output = T.nnet.softmax(lin_output)
+            #cost = T.nnet.categorical_crossentropy(RNN_output, y).mean()
+            cost = T.nnet.categorical_crossentropy(RNN_output, T.argmax(y, axis=-1)).mean()
+            cost_penalty = cost
+
+            # compute accuracy
+            accuracy = T.mean(T.eq(T.argmax(RNN_output, axis=-1), T.argmax(y, axis=-1)))
+
+            costs = [cost_penalty, cost, accuracy]
+        elif loss_function == 'MSE':
+            cost = ((lin_output - y)**2).mean()
+            cost_penalty = cost 
+
+            costs = [cost_penalty, cost]
+
+
+    else:
+        cost = cost_steps.mean()
+        accuracy = acc_steps.mean()
+        cost_penalty = cost
+        costs = [cost_penalty, cost, accuracy]
+
+    return [x, y], parameters, costs
+
+def GRU_LRDiag(n_input, n_hidden, n_output, n_proj, out_every_t=False, loss_function='CE', tied_projection_matrices=False, initial_b_u=1.0):
+    np.random.seed(1234)
+    rng = np.random.RandomState(1234)
+    
+    W_m = initialize_matrix(n_input, n_hidden, 'W_m', rng)
+    W_u = initialize_matrix(n_input, n_hidden, 'W_u', rng)
+    W_r = initialize_matrix(n_input, n_hidden, 'W_r', rng)
+
+    if tied_projection_matrices:
+        U_proj = initialize_matrix(n_hidden, n_proj, 'U_proj', rng)
+        U_proj_m = U_proj_u = U_proj_r = U_proj
+        parameters = [U_proj]
+    else:
+        U_proj_m = initialize_matrix(n_hidden, n_proj, 'U_proj_m', rng)
+        U_proj_u = initialize_matrix(n_hidden, n_proj, 'U_proj_u', rng)
+        U_proj_r = initialize_matrix(n_hidden, n_proj, 'U_proj_r', rng)
+        parameters = [U_proj_m, U_proj_u, U_proj_r]
+
+    U_d_m = theano.shared(rng.uniform(low=-0.01, high=0.01, size=(n_hidden,)).astype(theano.config.floatX), name='U_d_m')
+    U_d_u = theano.shared(rng.uniform(low=-0.01, high=0.01, size=(n_hidden,)).astype(theano.config.floatX), name='U_d_u')
+    U_d_r = theano.shared(rng.uniform(low=-0.01, high=0.01, size=(n_hidden,)).astype(theano.config.floatX), name='U_d_r')
+    
+    U_m = initialize_matrix(n_proj, n_hidden, 'U_m', rng)
+    U_u = initialize_matrix(n_proj, n_hidden, 'U_u', rng)
+    U_r = initialize_matrix(n_proj, n_hidden, 'U_r', rng)
+    b_m = theano.shared(np.zeros((n_hidden,), dtype=theano.config.floatX))
+    b_u = theano.shared(np.ones((n_hidden,), dtype=theano.config.floatX) * initial_b_u)
+    b_r = theano.shared(np.zeros((n_hidden,), dtype=theano.config.floatX))
+    h_0 = theano.shared(np.zeros((1, n_hidden), dtype=theano.config.floatX))
+    out_mat = initialize_matrix(n_hidden, n_output, 'out_mat', rng)
+    out_bias = theano.shared(np.zeros((n_output,), dtype=theano.config.floatX))
+    parameters.extend([W_m, W_u, W_r, U_m, U_u, U_r, b_m, b_u, b_r, h_0, out_mat, out_bias, U_d_m, U_d_u, U_d_r])
+    
+    x = T.tensor3()
+    if out_every_t:
+        y = T.tensor3()
+    else:
+        y = T.matrix()
+    
+    def recurrence(x_t, y_t, h_prev, cost_prev, acc_prev, W_m, W_u, W_r, U_m, U_u, U_r, b_m, b_u, b_r, out_mat, out_bias):
+        update_t = T.nnet.sigmoid(T.dot(x_t, W_u) + T.dot(h_prev, U_proj_u).dot(U_u) + (h_prev * U_d_u) + b_u.dimshuffle('x', 0))
+        reset_t  = T.nnet.sigmoid(T.dot(x_t, W_r) + T.dot(h_prev, U_proj_r).dot(U_r) + (h_prev * U_d_r) + b_r.dimshuffle('x', 0))
+        h_prev_reset = h_prev * reset_t
+        main_t   = T.tanh(T.dot(x_t, W_m) + T.dot(h_prev_reset, U_proj_m).dot(U_m) + (h_prev_reset * U_d_m) + b_m.dimshuffle('x', 0))
 
         h_t = (1.0 - update_t) * main_t + update_t * h_prev
 
