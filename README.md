@@ -1,5 +1,6 @@
 # lowrank-gru
 Gated Recurrent Unit with Low-rank matrix factorization
+Paper: http://arxiv.org/abs/1603.03116
 
 A reparametrization of the Gated Recurrent Unit (Cho et al. 2014, http://arxiv.org/abs/1406.1078) where the recurrent matrices are constrained to be low-rank. Reduces data complexity and memory usage.
 
