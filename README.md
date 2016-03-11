@@ -13,5 +13,5 @@ Notes:
 
 Requires Theano: http://www.deeplearning.net/software/theano/
 
-The file fftconv.py is derived from Theano and is therefore under Theano licence. This file is needed only for the baseline uRNN model and not for out Low-rank GRU and Low-rank plus diagonal GRU models.
+File fftconv.py is derived from Theano and is therefore under Theano licence. This file is needed only for the baseline uRNN model and not for out Low-rank GRU and Low-rank plus diagonal GRU models.
 
